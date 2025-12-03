@@ -44,7 +44,7 @@ interface Ticket {
 
 const API_URL = 'http://localhost:5000/api';
 
-export const SupportPage: React.FC = () => {
+export const ClientSupportPage: React.FC = () => {
   const { user } = useAuth();
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,8 +61,6 @@ export const SupportPage: React.FC = () => {
   });
 
   const [replyMessage, setReplyMessage] = useState('');
-
-  const isSupport = user?.role === 'support';
 
   // Charger les tickets
   const fetchTickets = async () => {
@@ -106,7 +104,6 @@ export const SupportPage: React.FC = () => {
     }
   };
 
-  // 🔥 CORRECTION CRITIQUE : Ajouter le useEffect manquant
   useEffect(() => {
     if (user) {
       fetchTickets();
@@ -173,29 +170,6 @@ export const SupportPage: React.FC = () => {
       toast.error(error.response?.data?.message || 'Erreur lors de l\'ajout de la réponse');
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const handleResolveTicket = async (ticketId: string) => {
-    try {
-      const token = localStorage.getItem('token');
-      await axios.patch(
-        `${API_URL}/tickets/${ticketId}/resolve`,
-        {},
-        { 
-          headers: {
-            'Authorization': `Bearer ${token}`
-          },
-          withCredentials: true 
-        }
-      );
-
-      toast.success('Ticket marqué comme résolu');
-      setSelectedTicket(null);
-      await fetchTickets();
-    } catch (error: any) {
-      console.error('Erreur lors de la résolution du ticket:', error);
-      toast.error(error.response?.data?.message || 'Erreur lors de la résolution du ticket');
     }
   };
 
@@ -280,18 +254,16 @@ export const SupportPage: React.FC = () => {
         <div>
           <h1 className="mb-2">Support client</h1>
           <p className="text-gray-600">
-            {isSupport ? 'Gérez les tickets des clients' : 'Obtenez de l\'aide pour vos questions'}
+            Obtenez de l'aide pour vos questions
           </p>
         </div>
-        {!isSupport && (
-          <Button
-            onClick={() => setShowNewTicket(true)}
-            className="bg-[#0066CC] hover:bg-[#0052A3]"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Nouveau ticket
-          </Button>
-        )}
+        <Button
+          onClick={() => setShowNewTicket(true)}
+          className="bg-[#0066CC] hover:bg-[#0052A3]"
+        >
+          <Plus className="h-4 w-4 mr-2" />
+          Nouveau ticket
+        </Button>
       </div>
 
       {/* Filters */}
@@ -337,15 +309,13 @@ export const SupportPage: React.FC = () => {
             <CardContent className="p-12 text-center">
               <HelpCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
               <p className="text-gray-600 mb-4">Aucun ticket trouvé</p>
-              {!isSupport && (
-                <Button
-                  onClick={() => setShowNewTicket(true)}
-                  className="bg-[#0066CC] hover:bg-[#0052A3]"
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Créer votre premier ticket
-                </Button>
-              )}
+              <Button
+                onClick={() => setShowNewTicket(true)}
+                className="bg-[#0066CC] hover:bg-[#0052A3]"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Créer votre premier ticket
+              </Button>
             </CardContent>
           </Card>
         ) : (
@@ -359,9 +329,6 @@ export const SupportPage: React.FC = () => {
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <CardTitle className="text-lg mb-2">{ticket.subject}</CardTitle>
-                    {isSupport && (
-                      <p className="text-sm text-gray-600 mb-2">Par : {ticket.userName}</p>
-                    )}
                     <div className="flex flex-wrap gap-2">
                       <Badge variant={getStatusVariant(ticket.status)}>
                         {getStatusIcon(ticket.status)}
@@ -469,7 +436,6 @@ export const SupportPage: React.FC = () => {
                   <div className="flex-1">
                     <DialogTitle>{selectedTicket.subject}</DialogTitle>
                     <DialogDescription>
-                      {isSupport && `Par : ${selectedTicket.userName} • `}
                       Créé le {formatDateTime(selectedTicket.createdAt)}
                     </DialogDescription>
                   </div>
@@ -519,26 +485,14 @@ export const SupportPage: React.FC = () => {
                       placeholder="Écrivez votre message..."
                       rows={4}
                     />
-                    <div className="flex gap-2">
-                      <Button
-                        onClick={() => handleReply(selectedTicket.id)}
-                        className="bg-[#0066CC] hover:bg-[#0052A3]"
-                        disabled={submitting}
-                      >
-                        {submitting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                        Envoyer
-                      </Button>
-                      {isSupport && (selectedTicket.status as 'open' | 'in_progress' | 'resolved') !== 'resolved' && (
-  <Button
-    onClick={() => handleResolveTicket(selectedTicket.id)}
-    variant="outline"
-    disabled={submitting}
-  >
-    Marquer comme résolu
-  </Button>
-)}
-
-                    </div>
+                    <Button
+                      onClick={() => handleReply(selectedTicket.id)}
+                      className="bg-[#0066CC] hover:bg-[#0052A3]"
+                      disabled={submitting}
+                    >
+                      {submitting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                      Envoyer
+                    </Button>
                   </div>
                 )}
 
