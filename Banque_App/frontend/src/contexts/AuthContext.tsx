@@ -128,7 +128,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       clearTimeout(timeout);
       timeout = setTimeout(() => {
         logout(); // Déconnecte automatiquement
-      }, 1 * 60 * 1000); // 10 minutes
+      }, 60 * 60 * 1000); // 10 minutes
     };
 
     // Activité utilisateur qui reset le timer

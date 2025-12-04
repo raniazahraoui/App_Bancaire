@@ -8,10 +8,9 @@ import { SupportTeamPage } from './pages/SupportTeamPage';
 import { AdminPage } from './pages/AdminPage';
 import { TransferPage } from './pages/TransferPage';
 import { BeneficiariesPage } from "./pages/BeneficiariesPage";
-
+import { TransactionsPage } from "./pages/TransactionsPage";
 
 import { Toaster } from './components/ui/sonner';
-
 
 type AuthScreen =
   | 'login'
@@ -20,8 +19,8 @@ type AuthScreen =
   | 'transfer'
   | 'support'
   | 'admin'
-  | 'beneficiaries';
-
+  | 'beneficiaries'
+  | 'transactions';
 
 const AppContent: React.FC = () => {
   const { isAuthenticated, user } = useAuth();
@@ -30,9 +29,7 @@ const AppContent: React.FC = () => {
   const handleNavigate = (page: AuthScreen) => {
     setCurrentScreen(page);
   };
-  
 
-  // Redirection automatique après authentification
   useEffect(() => {
     if (isAuthenticated && user) {
       switch (user.role) {
@@ -63,18 +60,13 @@ const AppContent: React.FC = () => {
         );
 
       case 'support':
-        if (user.role === 'client') {
-          return <ClientSupportPage />;
-        } else if (user.role === 'support') {
-          return <SupportTeamPage />;
-        } else {
-          return (
-            <div className="flex items-center justify-center h-screen">
-              <p className="text-red-600 text-lg">Accès non autorisé</p>
-            </div>
-          );
-        }
-
+        if (user.role === 'client') return <ClientSupportPage />;
+        if (user.role === 'support') return <SupportTeamPage />;
+        return (
+          <div className="flex items-center justify-center h-screen">
+            <p className="text-red-600 text-lg">Accès non autorisé</p>
+          </div>
+        );
 
       case 'admin':
         return user.role === 'admin' ? (
@@ -84,14 +76,16 @@ const AppContent: React.FC = () => {
             <p className="text-red-600 text-lg">Accès non autorisé</p>
           </div>
         );
-       case 'beneficiaries':
+
+      case 'beneficiaries':
         return user.role === 'client' ? (
-          <BeneficiariesPage  onNavigate={handleNavigate as (page: string) => void} />
+          <BeneficiariesPage onNavigate={handleNavigate as (page: string) => void} />
         ) : (
           <div className="flex items-center justify-center h-screen">
             <p className="text-red-600 text-lg">Accès non autorisé</p>
           </div>
         );
+
       case 'transfer':
         return user.role === 'client' ? (
           <TransferPage onNavigate={handleNavigate as (page: string) => void} />
@@ -101,20 +95,24 @@ const AppContent: React.FC = () => {
           </div>
         );
 
+      case 'transactions':
+        return user.role === 'client' ? (
+          <TransactionsPage onNavigate={handleNavigate as (page: string) => void}  />
+        ) : (
+          <div className="flex items-center justify-center h-screen">
+            <p className="text-red-600 text-lg">Accès non autorisé</p>
+          </div>
+        );
 
       default:
         return <LoginPage />;
     }
   }
 
-  // Si non connecté
   switch (currentScreen) {
-    case 'login':
-      return <LoginPage />;
-    case 'signup':
-      return <SignUpPage />;
-    default:
-      return <LoginPage />;
+    case 'login': return <LoginPage />;
+    case 'signup': return <SignUpPage />;
+    default: return <LoginPage />;
   }
 };
 

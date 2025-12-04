@@ -74,6 +74,22 @@ const SettingsView: React.FC<{ clientInfo: Client | null; token: string | null }
     confirmPassword: ''
   });
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const validatePassword = (password: string) => {
+  // Regex : min 8, au moins 1 maj, 1 min, 1 chiffre, 1 symbole
+  const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s]).{8,}$/;
+  if (!regex.test(password)) return "Le mot de passe doit contenir au moins 8 caractères, une majuscule, une minuscule, un chiffre et un symbole.";
+
+  // Vérifier qu'il ne contient pas le prénom ou le nom
+  const lowerPass = password.toLowerCase();
+  if (clientInfo) {
+    if (clientInfo.first_name && lowerPass.includes(clientInfo.first_name.toLowerCase()))
+      return "Le mot de passe ne doit pas contenir votre prénom.";
+    if (clientInfo.last_name && lowerPass.includes(clientInfo.last_name.toLowerCase()))
+      return "Le mot de passe ne doit pas contenir votre nom.";
+  }
+
+  return null; // mot de passe valide
+};
 
   const handleProfileUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,42 +109,47 @@ const SettingsView: React.FC<{ clientInfo: Client | null; token: string | null }
       setMessage({ type: 'error', text: 'Erreur lors de la mise à jour du profil' });
     }
   };
+  
 
-  const handlePasswordChange = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setMessage(null);
+const handlePasswordChange = async (e: React.FormEvent) => {
+  e.preventDefault();
+  setMessage(null);
 
-    if (passwordData.newPassword !== passwordData.confirmPassword) {
-      setMessage({ type: 'error', text: 'Les mots de passe ne correspondent pas' });
-      return;
+  // Vérifier que les mots de passe correspondent
+  if (passwordData.newPassword !== passwordData.confirmPassword) {
+    setMessage({ type: 'error', text: 'Les mots de passe ne correspondent pas' });
+    return;
+  }
+
+  // Validation complète du mot de passe
+  const validationError = validatePassword(passwordData.newPassword);
+  if (validationError) {
+    setMessage({ type: 'error', text: validationError });
+    return;
+  }
+
+  try {
+    const response = await axios.put(
+      'http://localhost:5000/api/change-password',
+      {
+        currentPassword: passwordData.currentPassword,
+        newPassword: passwordData.newPassword
+      },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    if (response.data.success) {
+      setMessage({ type: 'success', text: 'Mot de passe modifié avec succès !' });
+      setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
     }
+  } catch (err: any) {
+    setMessage({ 
+      type: 'error', 
+      text: err.response?.data?.message || 'Erreur lors du changement de mot de passe' 
+    });
+  }
+};
 
-    if (passwordData.newPassword.length < 8) {
-      setMessage({ type: 'error', text: 'Le mot de passe doit contenir au moins 8 caractères' });
-      return;
-    }
-
-    try {
-      const response = await axios.put(
-        'http://localhost:5000/api/change-password',
-        {
-          currentPassword: passwordData.currentPassword,
-          newPassword: passwordData.newPassword
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      if (response.data.success) {
-        setMessage({ type: 'success', text: 'Mot de passe modifié avec succès !' });
-        setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-      }
-    } catch (err: any) {
-      setMessage({ 
-        type: 'error', 
-        text: err.response?.data?.message || 'Erreur lors du changement de mot de passe' 
-      });
-    }
-  };
 
   return (
     <div className="space-y-6">
@@ -247,9 +268,11 @@ const SettingsView: React.FC<{ clientInfo: Client | null; token: string | null }
                 <input
                   type="password"
                   value={passwordData.newPassword}
+
                   onChange={(e) => setPasswordData({ ...passwordData, newPassword: e.target.value })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0066CC] focus:border-transparent"
                   required
+                  placeholder="Min 8 caractères, 1 maj, 1 min, 1 chiffre, 1 symbole, ne pas inclure prénom/nom"
                   minLength={8}
                 />
                 <p className="text-xs text-gray-500 mt-1">Minimum 8 caractères</p>

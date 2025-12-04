@@ -21,6 +21,9 @@ app.use(cors({
 app.use(express.json());
 app.use(helmet());
 // 🔥 RAJOUTER ICI : middleware refreshSession (avant authenticateToken)
+function generateSecureOTP_Admin() {
+      return crypto.randomBytes(4).toString("hex").toUpperCase(); // ex : "A7F3D9C1"
+    }
 function refreshSession(req, res, next) {
   const authHeader = req.headers['authorization'];
   if (!authHeader) return next();
@@ -139,9 +142,7 @@ app.post('/api/login', async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: '15m' }
     );
-    function generateSecureOTP_Admin() {
-      return crypto.randomBytes(4).toString("hex").toUpperCase(); // ex : "A7F3D9C1"
-    }
+    
 
     // OTP pour client
     let needsOTP = false;
@@ -290,7 +291,7 @@ app.post('/api/resend-otp', async (req, res) => {
   if (!otpStore[userId]) return res.status(404).json({ success: false, message: 'Utilisateur non trouvé ou OTP déjà validé' });
 
   // Générer un nouvel OTP
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const otp = generateSecureOTP_Admin()
   otpStore[userId] = otp;
 
   try {
@@ -394,21 +395,24 @@ app.put('/api/update-profile', authenticateToken, async (req, res) => {
 // Changer le mot de passe
 app.put('/api/change-password', authenticateToken, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
-  const userId = req.user.id_user;
+  const userId = req.user.id_user; // ✔ correct
 
   try {
     // Récupérer le mot de passe actuel
-    const [rows] = await pool.query('SELECT password_hash FROM users WHERE id_user = ?', [userId]);
-    
+    const [rows] = await pool.query(
+      'SELECT password_hash FROM users WHERE id_user = ?', 
+      [userId]
+    );
+
     if (rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
     }
 
     // Vérifier le mot de passe actuel
     const valid = await bcrypt.compare(currentPassword, rows[0].password_hash);
-    
+
     if (!valid) {
-      await logSecurity(user.id_user, "Changement mot de passe", "échouée", req);
+      await logSecurity(req.user.id_user, "Changement mot de passe", "échouée", req);
 
       return res.status(401).json({ success: false, message: 'Mot de passe actuel incorrect' });
     }
@@ -417,8 +421,12 @@ app.put('/api/change-password', authenticateToken, async (req, res) => {
     const newPasswordHash = await bcrypt.hash(newPassword, 10);
 
     // Mettre à jour
-    await pool.query('UPDATE users SET password_hash = ? WHERE id_user = ?', [newPasswordHash, userId]);
-    await logSecurity(user.id_user, "Changement mot de passe", "réussie", req);
+    await pool.query(
+      'UPDATE users SET password_hash = ? WHERE id_user = ?', 
+      [newPasswordHash, userId]
+    );
+
+    await logSecurity(req.user.id_user, "Changement mot de passe", "réussie", req);
 
     res.json({ success: true, message: 'Mot de passe modifié avec succès' });
   } catch (err) {
@@ -426,6 +434,7 @@ app.put('/api/change-password', authenticateToken, async (req, res) => {
     res.status(500).json({ success: false, message: 'Erreur serveur' });
   }
 });
+
 
 // Récupérer les transactions du client connecté
 app.get('/api/transactions', authenticateToken, async (req, res) => {
@@ -2496,7 +2505,492 @@ app.put('/api/beneficiaries/:id', authenticateToken, async (req, res) => {
 
 // =============================================
 // 💸 ROUTES TRANSFER - FIN
-// =============================================// Démarrage serveur
+// =============================================
+// =============================================
+// 💰 ROUTES TRANSACTIONS - HISTORIQUE DÉTAILLÉ
+// =============================================
+
+// Récupérer l'historique des transactions avec filtres avancés
+app.get('/api/transactions/history', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id_user;
+    const { 
+      limit = 50, 
+      status, 
+      startDate, 
+      endDate,
+      accountId,
+      type // 'sent' | 'received' | 'all'
+    } = req.query;
+    
+    // Récupérer l'id_client
+    const [clients] = await pool.query(
+      'SELECT id_client FROM clients WHERE id_user = ?',
+      [userId]
+    );
+    
+    if (clients.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Client non trouvé' 
+      });
+    }
+    
+    const clientId = clients[0].id_client;
+    
+    // Construire la requête selon le type
+    let query = `
+      SELECT 
+        t.id_transaction,
+        t.amount,
+        t.currency,
+        t.status,
+        t.reason,
+        t.created_at,
+        t.confirmed_at,
+        t.id_account_from,
+        t.id_account_to,
+        t.id_beneficiary,
+        
+        -- Compte source
+        a_from.account_number as from_account_number,
+        a_from.account_type as from_account_type,
+        a_from.id_client as from_client_id,
+        
+        -- Compte destination
+        a_to.account_number as to_account_number,
+        a_to.account_type as to_account_type,
+        a_to.id_client as to_client_id,
+        
+        -- Client source
+        c_from.first_name as from_first_name,
+        c_from.last_name as from_last_name,
+        
+        -- Client destination
+        c_to.first_name as to_first_name,
+        c_to.last_name as to_last_name,
+        
+        -- Bénéficiaire
+        b.name as beneficiary_name,
+        b.bank_name as beneficiary_bank,
+        b.type as beneficiary_type,
+        
+        -- Déterminer si c'est un envoi ou réception
+        CASE 
+          WHEN a_from.id_client = ? THEN 'sent'
+          WHEN a_to.id_client = ? THEN 'received'
+          ELSE 'unknown'
+        END as transaction_type
+        
+      FROM transactions t
+      LEFT JOIN accounts a_from ON t.id_account_from = a_from.id_account
+      LEFT JOIN accounts a_to ON t.id_account_to = a_to.id_account
+      LEFT JOIN clients c_from ON a_from.id_client = c_from.id_client
+      LEFT JOIN clients c_to ON a_to.id_client = c_to.id_client
+      LEFT JOIN beneficiaries b ON t.id_beneficiary = b.id_beneficiary
+      WHERE (a_from.id_client = ? OR a_to.id_client = ?)
+    `;
+    
+    const params = [clientId, clientId, clientId, clientId];
+    
+    // Filtrer par type de transaction
+    if (type && type !== 'all') {
+      if (type === 'sent') {
+        query += ' AND a_from.id_client = ?';
+        params.push(clientId);
+      } else if (type === 'received') {
+        query += ' AND a_to.id_client = ?';
+        params.push(clientId);
+      }
+    }
+    
+    // Filtrer par compte spécifique
+    if (accountId) {
+      query += ' AND (t.id_account_from = ? OR t.id_account_to = ?)';
+      params.push(parseInt(accountId), parseInt(accountId));
+    }
+    
+    // Filtrer par statut
+    if (status && status !== 'all') {
+      query += ' AND t.status = ?';
+      params.push(status);
+    }
+    
+    // Filtrer par date de début
+    if (startDate) {
+      query += ' AND t.created_at >= ?';
+      params.push(startDate);
+    }
+    
+    // Filtrer par date de fin
+    if (endDate) {
+      query += ' AND t.created_at <= ?';
+      params.push(endDate);
+    }
+    
+    query += ' ORDER BY t.created_at DESC LIMIT ?';
+    params.push(parseInt(limit));
+    
+    const [transactions] = await pool.query(query, params);
+    
+    // Formater les transactions
+    const formattedTransactions = transactions.map(t => {
+      const isSent = t.transaction_type === 'sent';
+      const isReceived = t.transaction_type === 'received';
+      
+      return {
+        id: t.id_transaction,
+        amount: parseFloat(t.amount),
+        currency: t.currency,
+        status: t.status,
+        reference: t.reason,
+        createdAt: t.created_at,
+        confirmedAt: t.confirmed_at,
+        type: t.transaction_type,
+        
+        // Informations du compte source
+        fromAccount: {
+          id: t.id_account_from,
+          number: t.from_account_number,
+          type: t.from_account_type,
+          holder: t.from_first_name && t.from_last_name 
+            ? `${t.from_first_name} ${t.from_last_name}`
+            : null
+        },
+        
+        // Informations du compte destination
+        toAccount: t.to_account_number ? {
+          id: t.id_account_to,
+          number: t.to_account_number,
+          type: t.to_account_type,
+          holder: t.to_first_name && t.to_last_name 
+            ? `${t.to_first_name} ${t.to_last_name}`
+            : null
+        } : null,
+        
+        // Informations du bénéficiaire (pour virements externes)
+        beneficiary: t.beneficiary_name ? {
+          name: t.beneficiary_name,
+          bank: t.beneficiary_bank,
+          type: t.beneficiary_type
+        } : null,
+        
+        // Libellé formaté selon le type
+        description: isSent 
+          ? (t.to_first_name 
+              ? `Virement vers ${t.to_first_name} ${t.to_last_name}`
+              : t.beneficiary_name 
+                ? `Virement vers ${t.beneficiary_name}`
+                : 'Virement envoyé')
+          : isReceived
+            ? (t.from_first_name 
+                ? `Virement de ${t.from_first_name} ${t.from_last_name}`
+                : 'Virement reçu')
+            : 'Transaction'
+      };
+    });
+    
+    res.json({ 
+      success: true, 
+      transactions: formattedTransactions,
+      total: formattedTransactions.length
+    });
+    
+  } catch (error) {
+    console.error('Erreur récupération historique:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Erreur serveur' 
+    });
+  }
+});
+
+// Récupérer les statistiques des transactions
+app.get('/api/transactions/stats', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id_user;
+    const { period = '30' } = req.query; // Période en jours
+    
+    // Récupérer l'id_client
+    const [clients] = await pool.query(
+      'SELECT id_client FROM clients WHERE id_user = ?',
+      [userId]
+    );
+    
+    if (clients.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Client non trouvé' 
+      });
+    }
+    
+    const clientId = clients[0].id_client;
+    
+    // Statistiques globales
+    const [stats] = await pool.query(`
+      SELECT 
+        -- Virements envoyés
+        COUNT(CASE WHEN a_from.id_client = ? THEN 1 END) as sent_count,
+        COALESCE(SUM(CASE WHEN a_from.id_client = ? THEN t.amount ELSE 0 END), 0) as sent_total,
+        
+        -- Virements reçus
+        COUNT(CASE WHEN a_to.id_client = ? THEN 1 END) as received_count,
+        COALESCE(SUM(CASE WHEN a_to.id_client = ? THEN t.amount ELSE 0 END), 0) as received_total,
+        
+        -- En attente
+        COUNT(CASE WHEN (a_from.id_client = ? OR a_to.id_client = ?) AND t.status = 'en attente' THEN 1 END) as pending_count,
+        
+        -- Réussies
+        COUNT(CASE WHEN (a_from.id_client = ? OR a_to.id_client = ?) AND t.status = 'réussie' THEN 1 END) as completed_count,
+        
+        -- Refusées
+        COUNT(CASE WHEN (a_from.id_client = ? OR a_to.id_client = ?) AND t.status = 'refusée' THEN 1 END) as failed_count
+        
+      FROM transactions t
+      LEFT JOIN accounts a_from ON t.id_account_from = a_from.id_account
+      LEFT JOIN accounts a_to ON t.id_account_to = a_to.id_account
+      WHERE (a_from.id_client = ? OR a_to.id_client = ?)
+        AND t.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+    `, [
+      clientId, clientId, clientId, clientId, 
+      clientId, clientId, clientId, clientId, 
+      clientId, clientId, clientId, clientId, 
+      parseInt(period)
+    ]);
+    
+    // Transactions par jour (pour graphique)
+    const [dailyStats] = await pool.query(`
+      SELECT 
+        DATE(t.created_at) as date,
+        COUNT(CASE WHEN a_from.id_client = ? THEN 1 END) as sent,
+        COUNT(CASE WHEN a_to.id_client = ? THEN 1 END) as received,
+        COALESCE(SUM(CASE WHEN a_from.id_client = ? THEN t.amount ELSE 0 END), 0) as sent_amount,
+        COALESCE(SUM(CASE WHEN a_to.id_client = ? THEN t.amount ELSE 0 END), 0) as received_amount
+      FROM transactions t
+      LEFT JOIN accounts a_from ON t.id_account_from = a_from.id_account
+      LEFT JOIN accounts a_to ON t.id_account_to = a_to.id_account
+      WHERE (a_from.id_client = ? OR a_to.id_client = ?)
+        AND t.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+      GROUP BY DATE(t.created_at)
+      ORDER BY date DESC
+    `, [
+      clientId, clientId, clientId, clientId, 
+      clientId, clientId, parseInt(period)
+    ]);
+    
+    res.json({
+      success: true,
+      stats: {
+        sent: {
+          count: stats[0].sent_count,
+          total: parseFloat(stats[0].sent_total)
+        },
+        received: {
+          count: stats[0].received_count,
+          total: parseFloat(stats[0].received_total)
+        },
+        pending: stats[0].pending_count,
+        completed: stats[0].completed_count,
+        failed: stats[0].failed_count
+      },
+      daily: dailyStats.map(day => ({
+        date: day.date,
+        sent: day.sent,
+        received: day.received,
+        sentAmount: parseFloat(day.sent_amount),
+        receivedAmount: parseFloat(day.received_amount)
+      }))
+    });
+    
+  } catch (error) {
+    console.error('Erreur récupération stats:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Erreur serveur' 
+    });
+  }
+});
+
+// Récupérer les détails d'une transaction spécifique
+app.get('/api/transactions/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id_user;
+    const transactionId = req.params.id;
+    
+    // Récupérer l'id_client
+    const [clients] = await pool.query(
+      'SELECT id_client FROM clients WHERE id_user = ?',
+      [userId]
+    );
+    
+    if (clients.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Client non trouvé' 
+      });
+    }
+    
+    const clientId = clients[0].id_client;
+    
+    // Récupérer la transaction
+    const [transactions] = await pool.query(`
+      SELECT 
+        t.*,
+        a_from.account_number as from_account_number,
+        a_from.iban as from_iban,
+        a_to.account_number as to_account_number,
+        a_to.iban as to_iban,
+        c_from.first_name as from_first_name,
+        c_from.last_name as from_last_name,
+        c_to.first_name as to_first_name,
+        c_to.last_name as to_last_name,
+        b.name as beneficiary_name,
+        b.bank_name as beneficiary_bank,
+        b.iban as beneficiary_iban,
+        b.type as beneficiary_type
+      FROM transactions t
+      LEFT JOIN accounts a_from ON t.id_account_from = a_from.id_account
+      LEFT JOIN accounts a_to ON t.id_account_to = a_to.id_account
+      LEFT JOIN clients c_from ON a_from.id_client = c_from.id_client
+      LEFT JOIN clients c_to ON a_to.id_client = c_to.id_client
+      LEFT JOIN beneficiaries b ON t.id_beneficiary = b.id_beneficiary
+      WHERE t.id_transaction = ?
+        AND (a_from.id_client = ? OR a_to.id_client = ?)
+    `, [transactionId, clientId, clientId]);
+    
+    if (transactions.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Transaction non trouvée' 
+      });
+    }
+    
+    const t = transactions[0];
+    
+    res.json({
+      success: true,
+      transaction: {
+        id: t.id_transaction,
+        amount: parseFloat(t.amount),
+        currency: t.currency,
+        status: t.status,
+        reference: t.reason,
+        createdAt: t.created_at,
+        confirmedAt: t.confirmed_at,
+        fromAccount: {
+          number: t.from_account_number,
+          iban: t.from_iban,
+          holder: `${t.from_first_name} ${t.from_last_name}`
+        },
+        toAccount: t.to_account_number ? {
+          number: t.to_account_number,
+          iban: t.to_iban,
+          holder: `${t.to_first_name} ${t.to_last_name}`
+        } : null,
+        beneficiary: t.beneficiary_name ? {
+          name: t.beneficiary_name,
+          bank: t.beneficiary_bank,
+          iban: t.beneficiary_iban,
+          type: t.beneficiary_type
+        } : null
+      }
+    });
+    
+  } catch (error) {
+    console.error('Erreur récupération transaction:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Erreur serveur' 
+    });
+  }
+});
+
+// Annuler une transaction en attente
+app.post('/api/transactions/:id/cancel', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id_user;
+    const transactionId = req.params.id;
+    
+    // Récupérer l'id_client
+    const [clients] = await pool.query(
+      'SELECT id_client FROM clients WHERE id_user = ?',
+      [userId]
+    );
+    
+    if (clients.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Client non trouvé' 
+      });
+    }
+    
+    const clientId = clients[0].id_client;
+    
+    // Vérifier que la transaction est en attente et appartient au client
+    const [transactions] = await pool.query(`
+      SELECT t.*, a.id_client
+      FROM transactions t
+      INNER JOIN accounts a ON t.id_account_from = a.id_account
+      WHERE t.id_transaction = ?
+        AND a.id_client = ?
+        AND t.status = 'en attente'
+    `, [transactionId, clientId]);
+    
+    if (transactions.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Transaction non trouvée ou impossible à annuler' 
+      });
+    }
+    
+    const transaction = transactions[0];
+    
+    const connection = await pool.getConnection();
+    
+    try {
+      await connection.beginTransaction();
+      
+      // Rembourser le montant sur le compte source
+      await connection.query(
+        'UPDATE accounts SET balance = balance + ? WHERE id_account = ?',
+        [transaction.amount, transaction.id_account_from]
+      );
+      
+      // Mettre à jour le statut de la transaction
+      await connection.query(
+        'UPDATE transactions SET status = ? WHERE id_transaction = ?',
+        ['refusée', transactionId]
+      );
+      
+      // Log de sécurité
+      await connection.query(
+        'INSERT INTO logs_security (id_user, action, ip_address, user_agent, status) VALUES (?, ?, ?, ?, ?)',
+        [userId, `Annulation transaction ${transactionId}`, req.ip, req.get('user-agent'), 'réussie']
+      );
+      
+      await connection.commit();
+      
+      res.json({
+        success: true,
+        message: 'Transaction annulée avec succès'
+      });
+      
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+    
+  } catch (error) {
+    console.error('Erreur annulation transaction:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Erreur serveur' 
+    });
+  }
+});
+// Démarrage serveur
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
