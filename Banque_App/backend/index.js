@@ -86,7 +86,7 @@ const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString()
 const {sendOTP} = require("./emailService");
 
 // Login (mise à jour)
-const MAX_ATTEMPTS = 5;
+const MAX_ATTEMPTS = 3;
 const LOCK_TIME = 10 * 60 * 1000; // 10 minutes
 
 app.post('/api/login', async (req, res) => {
